@@ -1,5 +1,6 @@
 package cn.xpleaf.calcite.common;
 
+import cn.xpleaf.calcite.result.ResultFormatter;
 import cn.xpleaf.calcite.schema.HrSchema;
 import org.apache.calcite.DataContext;
 import org.apache.calcite.adapter.enumerable.EnumerableConvention;
@@ -17,6 +18,7 @@ import org.apache.calcite.linq4j.QueryProvider;
 import org.apache.calcite.plan.*;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
+import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.runtime.Bindable;
 import org.apache.calcite.runtime.Hook;
@@ -83,7 +85,8 @@ public class BindableMain {
         // sql
         String sql = "select * from hr.emps";
         sql = "select count(*) as total from hr.emps";
-        // sql = "select name from hr.emps";
+        sql = "select deptno,count(*) as total,sum(salary) as sum_salary from hr.emps group by deptno";
+        sql = "select * from hr.emps";
         System.out.println("Sql source: \n" + sql + "\n");
 
         // sql parse
@@ -114,7 +117,7 @@ public class BindableMain {
 
         // execute bindable
         Bindable bindable = Interpreters.bindable(root.rel);
-        Enumerable bind = bindable.bind(new DataContext() {
+        Enumerable enumerable = bindable.bind(new DataContext() {
             @Override
             public SchemaPlus getRootSchema() {
                 return rootSchema;
@@ -135,12 +138,12 @@ public class BindableMain {
                 return null;
             }
         });
-        System.out.println(bind);
-        Iterator iterator = bind.iterator();
-        while (iterator.hasNext()) {
-            Object res = iterator.next();
-            System.out.println(res);
-        }
+
+        Iterator iterator = enumerable.iterator();
+        RelDataType rowType = root.rel.getRowType();
+        ResultFormatter resultFormatter = new ResultFormatter(iterator, rowType);
+        List<Object> resultList = resultFormatter.getResultList();
+        System.out.println(resultList);
     }
 
 }
