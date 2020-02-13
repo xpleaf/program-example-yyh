@@ -52,6 +52,9 @@ public class RowSignature {
                     builder.add(columnName, SqlTypeName.FLOAT);
                 case LONG:
                     builder.add(columnName, SqlTypeName.BIGINT);
+                case TIMESTAMP:
+                    builder.add(columnName, SqlTypeName.TIMESTAMP);
+                case STRING:
                 default:
                     builder.add(columnName, SqlTypeName.VARCHAR);
             }
