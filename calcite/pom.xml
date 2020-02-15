@@ -30,6 +30,11 @@
             <artifactId>calcite-elasticsearch</artifactId>
             <version>${calcite.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.apache.calcite</groupId>
+            <artifactId>calcite-druid</artifactId>
+            <version>${calcite.version}</version>
+        </dependency>
         <!-- lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
