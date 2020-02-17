@@ -30,7 +30,7 @@ public class ElasticsearchQueryTest {
                 connection.unwrap(CalciteConnection.class);
         final SchemaPlus rootSchema = calciteConnection.getRootSchema();
         rootSchema.add("information_schema", new InformationSchema(rootSchema));
-        rootSchema.add("school", buildElasticsearchSchema());
+        rootSchema.add("es", buildElasticsearchSchema());
         statement = calciteConnection.createStatement();
     }
 
@@ -46,7 +46,7 @@ public class ElasticsearchQueryTest {
     // {name=xpleaf, age=26, rate=0.86, percent=0.95, join_time=1551058601000}
     @Test
     public void test_query() throws SQLException {
-        String sql = "select * from school.teachers";
+        String sql = "select * from es.teachers";
         resultSet = statement.executeQuery(sql);
         String res = ResultSetUtil.resultString(resultSet);
         System.out.println(res);
