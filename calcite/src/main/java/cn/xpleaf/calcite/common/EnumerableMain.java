@@ -1,6 +1,7 @@
 package cn.xpleaf.calcite.common;
 
 import cn.xpleaf.calcite.schema.HrSchema;
+import cn.xpleaf.query.schema.InformationSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.calcite.DataContext;
 import org.apache.calcite.adapter.druid.DruidSchema;
@@ -14,6 +15,7 @@ import org.apache.calcite.avatica.util.Casing;
 import org.apache.calcite.avatica.util.Quoting;
 import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.config.CalciteConnectionConfigImpl;
+import org.apache.calcite.config.CalciteConnectionProperty;
 import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.linq4j.Enumerable;
@@ -46,6 +48,7 @@ public class EnumerableMain {
 
     public static void main(String[] args) throws Exception {
         SchemaPlus rootSchema = Frameworks.createRootSchema(true);
+        rootSchema.add("information_schema", new InformationSchema(rootSchema));
         rootSchema.add("hr", new ReflectiveSchema(new HrSchema()));
         rootSchema.add("druid", buildDruidSchema());
         rootSchema.add("es", buildElasticsearchSchema());
@@ -54,6 +57,7 @@ public class EnumerableMain {
                 .setQuoting(Quoting.BACK_TICK)
                 .setUnquotedCasing(Casing.UNCHANGED)
                 .setQuotedCasing(Casing.UNCHANGED)
+                // 不会有效地设置到Validator中，因为此时使用下面unwrap的CalciteConnectionConfig，而不是在PlannerImpl中新创建一个
                 .setCaseSensitive(false)
                 .setParserFactory(SqlParserImpl::new)
                 .build();
@@ -70,6 +74,7 @@ public class EnumerableMain {
                         // This seems to be the best way to provide our own SqlConformance instance. Otherwise, Calcite's
                         // validator will not respect it.
                         final Properties props = new Properties();
+                        props.setProperty(CalciteConnectionProperty.CASE_SENSITIVE.camelName(), String.valueOf(false));
                         if (aClass.equals(CalciteConnectionConfig.class)) {
                             return (C) new CalciteConnectionConfigImpl(props);
                         }
@@ -93,6 +98,8 @@ public class EnumerableMain {
         sql = "select name from hr.emps";
         sql = "select _MAP['name'] from es.teachers";
         sql = "select comment from druid.wiki limit 1";
+        sql = "select schema_name from information_schema.schemata";
+        sql = "select table_name from information_schema.tables";
         System.out.println("Sql source: \n" + sql + "\n");
 
         // sql parse
