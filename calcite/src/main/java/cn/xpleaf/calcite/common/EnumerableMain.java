@@ -27,6 +27,8 @@ import org.apache.calcite.rel.RelRoot;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.runtime.Bindable;
 import org.apache.calcite.schema.SchemaPlus;
+import org.apache.calcite.sql.SqlExplain;
+import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParser;
@@ -96,15 +98,22 @@ public class EnumerableMain {
         sql = "select count(*) as total from hr.emps";
         sql = "select name,count(*) as total from hr.emps group by name";
         sql = "select name from hr.emps";
-        sql = "select _MAP['name'] from es.teachers";
-        sql = "select comment from druid.wiki limit 1";
         sql = "select schema_name from information_schema.schemata";
         sql = "select table_name from information_schema.tables";
+        sql = "select _MAP['name'] from es.teachers";
+        sql = "select comment from druid.wiki limit 1";
+        sql = "explain plan for " + sql;
         System.out.println("Sql source: \n" + sql + "\n");
 
         // sql parse
         SqlNode parsed = commonPlanner.parse(sql);
         System.out.println("Sql parsed: \n" + parsed + "\n");
+
+        SqlExplain sqlExplain = null;
+        if (parsed.getKind() == SqlKind.EXPLAIN) {
+            sqlExplain = (SqlExplain) parsed;
+            parsed = sqlExplain.getExplicandum();
+        }
 
         // sql validate
         SqlNode validated = commonPlanner.validate(parsed);
@@ -129,36 +138,40 @@ public class EnumerableMain {
         root = root.withRel(relNode);
         System.out.println("PhysicalPlan: \n" + RelOptUtil.toString(root.rel) + "\n");
 
-        // execute enumerable
-        EnumerableRel enumerable = (EnumerableRel) root.rel;
-        CalciteConnectionConfig calciteConnectionConfig = planner
-                .getContext()
-                .unwrap(CalciteConnectionConfig.class);
-        LinkedHashMap internalParameters = new LinkedHashMap();
-        CalcitePrepare.SparkHandler sparkHandler = CalcitePrepareImpl.Dummy.getSparkHandler(false);
-        Bindable bindable = EnumerableInterpretable.toBindable(internalParameters,
-                sparkHandler, enumerable, EnumerableRel.Prefer.ARRAY);
-        Enumerable bind = bindable.bind(new DataContext() {
-            @Override
-            public SchemaPlus getRootSchema() {
-                return rootSchema;
-            }
+        if (sqlExplain != null) {
+            String res = RelOptUtil.toString(root.rel);
+            System.out.println("Explain result: \n" + res + "\n");
+        } else {
+            // execute enumerable
+            EnumerableRel enumerable = (EnumerableRel) root.rel;
+            CalciteConnectionConfig calciteConnectionConfig = planner
+                    .getContext()
+                    .unwrap(CalciteConnectionConfig.class);
+            LinkedHashMap internalParameters = new LinkedHashMap();
+            CalcitePrepare.SparkHandler sparkHandler = CalcitePrepareImpl.Dummy.getSparkHandler(false);
+            Bindable bindable = EnumerableInterpretable.toBindable(internalParameters,
+                    sparkHandler, enumerable, EnumerableRel.Prefer.ARRAY);
+            Enumerable bind = bindable.bind(new DataContext() {
+                @Override
+                public SchemaPlus getRootSchema() {
+                    return rootSchema;
+                }
 
-            @Override
-            public JavaTypeFactory getTypeFactory() {
-                return new JavaTypeFactoryImpl();
-            }
+                @Override
+                public JavaTypeFactory getTypeFactory() {
+                    return new JavaTypeFactoryImpl();
+                }
 
-            @Override
-            public QueryProvider getQueryProvider() {
-                return null;
-            }
+                @Override
+                public QueryProvider getQueryProvider() {
+                    return null;
+                }
 
-            @Override
-            public Object get(String name) {
-                // DataContext的较完整实现可以参考Calcite的JDBC流程方式源码来看，这里只是让整个流程跑起来
-                // 这里要注意的是，如果数据源为ES，这里直接return null也行，因为es的适配器的执行方式不会用到这里的参数
-                // 但是数据源为Druid时，它使用EnumerableInterpreter来执行：
+                @Override
+                public Object get(String name) {
+                    // DataContext的较完整实现可以参考Calcite的JDBC流程方式源码来看，这里只是让整个流程跑起来
+                    // 这里要注意的是，如果数据源为ES，这里直接return null也行，因为es的适配器的执行方式不会用到这里的参数
+                    // 但是数据源为Druid时，它使用EnumerableInterpreter来执行：
                 /*
                 public org.apache.calcite.linq4j.Enumerable bind(final org.apache.calcite.DataContext root) {
                   final org.apache.calcite.rel.RelNode v0stashed = (org.apache.calcite.rel.RelNode) root.get("v0stashed");
@@ -168,17 +181,18 @@ public class EnumerableMain {
                   return org.apache.calcite.runtime.Enumerables.slice0(interpreter);
                 }
                  */
-                // 它会从DataContext去获取优化后的物理计划的，其实也就是保存在前面的internalParameters当中
-                // 所以要把internalParameters中的k-v值添加到这里的context中来，只是为了简化，我直接用internalParameters
-                // 当作context，实际上还有其它一些值需要保存到context这里来的，请参考Calcite原生主流程源码
-                return internalParameters.get(name);
+                    // 它会从DataContext去获取优化后的物理计划的，其实也就是保存在前面的internalParameters当中
+                    // 所以要把internalParameters中的k-v值添加到这里的context中来，只是为了简化，我直接用internalParameters
+                    // 当作context，实际上还有其它一些值需要保存到context这里来的，请参考Calcite原生主流程源码
+                    return internalParameters.get(name);
+                }
+            });
+            System.out.println(bind);
+            Iterator iterator = bind.iterator();
+            while (iterator.hasNext()) {
+                Object res = iterator.next();
+                System.out.println(res);
             }
-        });
-        System.out.println(bind);
-        Iterator iterator = bind.iterator();
-        while (iterator.hasNext()) {
-            Object res = iterator.next();
-            System.out.println(res);
         }
         closeRestClient();
     }
