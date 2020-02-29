@@ -1,8 +1,10 @@
 package cn.xpleaf.calcite.common;
 
 import cn.xpleaf.calcite.schema.HrSchema;
+import cn.xpleaf.calcite.utils.ResultSetUtil;
 import cn.xpleaf.query.schema.InformationSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.collect.ImmutableList;
 import org.apache.calcite.DataContext;
 import org.apache.calcite.adapter.druid.DruidSchema;
 import org.apache.calcite.adapter.elasticsearch.ElasticsearchSchema;
@@ -14,6 +16,7 @@ import org.apache.calcite.adapter.java.ReflectiveSchema;
 import org.apache.calcite.adapter.jdbc.JdbcConvention;
 import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.adapter.jdbc.JdbcTable;
+import org.apache.calcite.adapter.jdbc.JdbcTableScan;
 import org.apache.calcite.avatica.util.Casing;
 import org.apache.calcite.avatica.util.Quoting;
 import org.apache.calcite.config.CalciteConnectionConfig;
@@ -35,14 +38,13 @@ import org.apache.calcite.runtime.Bindable;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.Schemas;
-import org.apache.calcite.sql.SqlExplain;
-import org.apache.calcite.sql.SqlKind;
-import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.*;
 import org.apache.calcite.sql.dialect.HiveSqlDialect;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql.parser.impl.SqlParserImpl;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.sql.util.SqlShuttle;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
@@ -53,9 +55,13 @@ import org.apache.commons.dbcp2.BasicDataSourceFactory;
 import org.apache.http.HttpHost;
 import org.elasticsearch.client.RestClient;
 
+import javax.sql.DataSource;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.*;
 
 public class EnumerableMain {
@@ -123,7 +129,9 @@ public class EnumerableMain {
         sql = "explain plan for " + sql;
         sql = "select schema_name from information_schema.schemata";
         sql = "select table_name from information_schema.tables";
-        // Note: 下面这个sql，用jdbc方式，只有scan能够pushdown，其它所有计算都在calcite层面完成
+        sql = "select * from hive.person order by salary desc limit 1";
+        // Note: 下面这个sql，如果走calcite的全jdbc流程，只有scan能够pushdown，其它所有计算都在calcite层面完成
+        // 所以识别出其是查询jdbc数据源，就不走全流程的calcite jdbc方式，拿到dataSource之后走传统的jdbc方式查询
         sql = "select t.double_salary,t.young_age,(t.double_salary + t.young_age) * 2 as complex_field,count(*) as total\n" +
                 "from\n" +
                 "(\n" +
@@ -135,7 +143,6 @@ public class EnumerableMain {
                 "group by t.double_salary,t.young_age\n" +
                 "order by complex_field desc \n" +
                 "limit 1";
-        sql = "select * from hive.person";
         System.out.println("Sql source: \n" + sql + "\n");
 
         // sql parse
@@ -155,6 +162,23 @@ public class EnumerableMain {
         // logicalPlan
         RelRoot root = commonPlanner.rel(validated);
         System.out.println("LogicalPlan: \n" + RelOptUtil.toString(root.rel) + "\n");
+        if (isJdbcQuery(root.rel)) {    // Note: jdbc查询，走传统的jdbc执行流程，calcite只用于元数据系统构建和schema校验
+            System.out.println("it's a jdbc query!");
+            if (validated.getKind() == SqlKind.SELECT) {
+                ((SqlSelect) validated).getFrom().accept(new SqlFromReWriter());
+            }
+            String validatedSql = validated.toSqlString(HiveSqlDialect.DEFAULT).toString();
+            JdbcSchema jdbcSchema = rootSchema.getSubSchema("hive").unwrap(JdbcSchema.class);
+            DataSource dataSource = jdbcSchema.getDataSource();
+            try(
+            Connection connection = dataSource.getConnection();
+            PreparedStatement preparedStatement = connection.prepareStatement(validatedSql);
+            ResultSet resultSet = preparedStatement.executeQuery()) {
+                List<List<Object>> lists = ResultSetUtil.resultList(resultSet);
+                System.out.println(lists);
+            }
+            return;
+        }
 
         // Optimize（PhysicalPlan）参考：org.apache.calcite.prepare.Prepare.optimize
         RelTraitSet relTraitSet = root.rel.getTraitSet()
@@ -234,6 +258,17 @@ public class EnumerableMain {
         closeRestClient();
     }
 
+    private static boolean isJdbcQuery(RelNode rel) {
+        if (rel.getInputs().size() > 0) {
+            return isJdbcQuery(rel.getInput(0));
+        } else {
+            if (rel instanceof JdbcTableScan) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static DruidSchema buildDruidSchema() {
         String brokerUrl = "http://localhost:8082";
         String coordinatorUrl = "http://localhost:8081";
@@ -290,6 +325,19 @@ public class EnumerableMain {
     private static void closeRestClient() throws IOException {
         if (restClient != null) {
             restClient.close();
+        }
+    }
+
+    private static class SqlFromReWriter extends SqlShuttle {
+
+        @Override
+        public SqlNode visit(SqlIdentifier id) {
+            ImmutableList<String> names = id.names;
+            int size = names.size();
+            if (size > 1) {
+                id.setNames(names.subList(size - 1, size), ImmutableList.of(id.getParserPosition()));
+            }
+            return super.visit(id);
         }
     }
 
