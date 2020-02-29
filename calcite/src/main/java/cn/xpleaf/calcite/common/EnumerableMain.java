@@ -68,6 +68,11 @@ public class EnumerableMain {
         rootSchema.add("hr", new ReflectiveSchema(new HrSchema()));
         rootSchema.add("druid", buildDruidSchema());
         rootSchema.add("es", buildElasticsearchSchema());
+        // Note: 实际上查hive或者rdb，不建议使用下面的这种方式，按照传统jdbc方式直接拿到sql来透传就好了，因为calcite的jdbc适配器
+        // 并不太好，稍微复杂一点的sql语句就会导致无法pushdown，进而导致大量的操作在calcite层面完成，如果数据量小那倒没啥，
+        // 但是如果是查询hive或者Spark Thrift JDBCServer，把这么多数据load回来再做单机版的计算，那就很容易OOM
+        // hive或spark本身的分布式意义就不是很大了，这时它仅仅用来scan数据
+        // 所以要考虑sql的优化，我们把validate之后的sql透传给hive或spark sql，让它使用自身的sql优化器去优化并生成物理计划就好了
         buildJdbcSchemaForHive(rootSchema);
 
         SqlParser.Config sqlParserConfig = SqlParser.configBuilder()
@@ -118,6 +123,18 @@ public class EnumerableMain {
         sql = "explain plan for " + sql;
         sql = "select schema_name from information_schema.schemata";
         sql = "select table_name from information_schema.tables";
+        // Note: 下面这个sql，用jdbc方式，只有scan能够pushdown，其它所有计算都在calcite层面完成
+        sql = "select t.double_salary,t.young_age,(t.double_salary + t.young_age) * 2 as complex_field,count(*) as total\n" +
+                "from\n" +
+                "(\n" +
+                "select salary * 2 as double_salary,age - 1 as young_age\n" +
+                "from hive.person\n" +
+                "order by age desc \n" +
+                "limit 5\n" +
+                ") as t\n" +
+                "group by t.double_salary,t.young_age\n" +
+                "order by complex_field desc \n" +
+                "limit 1";
         sql = "select * from hive.person";
         System.out.println("Sql source: \n" + sql + "\n");
 
