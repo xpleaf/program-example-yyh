@@ -11,6 +11,9 @@ import org.apache.calcite.adapter.enumerable.EnumerableInterpretable;
 import org.apache.calcite.adapter.enumerable.EnumerableRel;
 import org.apache.calcite.adapter.java.JavaTypeFactory;
 import org.apache.calcite.adapter.java.ReflectiveSchema;
+import org.apache.calcite.adapter.jdbc.JdbcConvention;
+import org.apache.calcite.adapter.jdbc.JdbcSchema;
+import org.apache.calcite.adapter.jdbc.JdbcTable;
 import org.apache.calcite.avatica.util.Casing;
 import org.apache.calcite.avatica.util.Quoting;
 import org.apache.calcite.config.CalciteConnectionConfig;
@@ -20,28 +23,39 @@ import org.apache.calcite.jdbc.CalcitePrepare;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.linq4j.Enumerable;
 import org.apache.calcite.linq4j.QueryProvider;
+import org.apache.calcite.linq4j.tree.Expression;
 import org.apache.calcite.plan.*;
 import org.apache.calcite.prepare.CalcitePrepareImpl;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
+import org.apache.calcite.rel.type.RelProtoDataType;
 import org.apache.calcite.runtime.Bindable;
+import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
+import org.apache.calcite.schema.Schemas;
 import org.apache.calcite.sql.SqlExplain;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.dialect.HiveSqlDialect;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql.parser.impl.SqlParserImpl;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql2rel.SqlToRelConverter;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
 import org.apache.calcite.tools.Programs;
+import org.apache.commons.dbcp2.BasicDataSource;
+import org.apache.commons.dbcp2.BasicDataSourceFactory;
 import org.apache.http.HttpHost;
 import org.elasticsearch.client.RestClient;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.util.*;
 
 public class EnumerableMain {
@@ -54,6 +68,7 @@ public class EnumerableMain {
         rootSchema.add("hr", new ReflectiveSchema(new HrSchema()));
         rootSchema.add("druid", buildDruidSchema());
         rootSchema.add("es", buildElasticsearchSchema());
+        buildJdbcSchemaForHive(rootSchema);
 
         SqlParser.Config sqlParserConfig = SqlParser.configBuilder()
                 .setQuoting(Quoting.BACK_TICK)
@@ -98,11 +113,12 @@ public class EnumerableMain {
         sql = "select count(*) as total from hr.emps";
         sql = "select name,count(*) as total from hr.emps group by name";
         sql = "select name from hr.emps";
-        sql = "select schema_name from information_schema.schemata";
-        sql = "select table_name from information_schema.tables";
         sql = "select _MAP['name'] from es.teachers";
         sql = "select comment from druid.wiki limit 1";
         sql = "explain plan for " + sql;
+        sql = "select schema_name from information_schema.schemata";
+        sql = "select table_name from information_schema.tables";
+        sql = "select * from hive.person";
         System.out.println("Sql source: \n" + sql + "\n");
 
         // sql parse
@@ -191,7 +207,11 @@ public class EnumerableMain {
             Iterator iterator = bind.iterator();
             while (iterator.hasNext()) {
                 Object res = iterator.next();
-                System.out.println(res);
+                if (res instanceof Object[]) {
+                    System.out.println(Arrays.toString((Object[]) res));
+                } else {
+                    System.out.println(res);
+                }
             }
         }
         closeRestClient();
@@ -209,6 +229,45 @@ public class EnumerableMain {
                 .build();
         return new ElasticsearchSchema(
                 restClient, new ObjectMapper(), "teachers");
+    }
+
+    private static void buildJdbcSchemaForHive(SchemaPlus rootSchema) throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty("driverClassName", "org.apache.hive.jdbc.HiveDriver");
+        properties.setProperty("url", "jdbc:hive2://localhost:10000");
+        BasicDataSource dataSource = BasicDataSourceFactory.createDataSource(properties);
+        // 为什么这样写？它用于Jdbc方式执行时的动态代码获取subSchema，你可以自己调试一下，这是参考JdbcSchema实现的
+        String calciteHiveSchemaName = "hive";  // Note: 这是calcite层面的schemaName
+        Expression expression = Schemas.subSchemaExpression(rootSchema, calciteHiveSchemaName, JdbcSchema.class);
+        JdbcConvention hiveConversion = JdbcConvention.of(HiveSqlDialect.DEFAULT, expression, "hiveConversion");
+        String hiveSchemaName = "default";  // Note: 这是hive元数据层面的schemaName，就是我们平时理解的db
+        // Note: 下面创建JdbcSchema时的catalog要用null，否则转换为底层数据源的sql时，会变为*.default.person，因为你填写""的话
+        // 它认为你是有catalog的，所以在前面加了*，但是如果填写null的话，就会认为没有catalog，这样底层数据源的顶层nameSpace就是default
+        JdbcSchema jdbcSchema = new JdbcSchema(dataSource, HiveSqlDialect.DEFAULT, hiveConversion, null, hiveSchemaName);
+        rootSchema.add(calciteHiveSchemaName, jdbcSchema);
+
+        // 下面用反射的原因在于，JdbcTable的一些方法是package私有的，但为了构建定制的元数据系统，我们需要手动创建
+        // 另外，还手动给table添加RowType，目前来看查hive去获取类型时拿不到，会导致生成的动态代码有问题，动态代码在执行被编译时会报错
+        // 至于生成的动态代码是怎么样的，为什么会报错？报什么错？它是如何根据table的字段类型去生成的动态代码的？可以去debug一下代码，不复杂
+        Class<JdbcTable> jdbcTableClass = JdbcTable.class;
+        Constructor<JdbcTable> jdbcTableConstructor = jdbcTableClass.getDeclaredConstructor(JdbcSchema.class,
+                String.class, String.class, String.class, Schema.TableType.class);
+        jdbcTableConstructor.setAccessible(true);
+        String hiveTableName = "person";    // Note: 这是hive层面的tableName
+        JdbcTable jdbcTable = jdbcTableConstructor.newInstance(jdbcSchema, null, hiveSchemaName, hiveTableName, Schema.TableType.TABLE);
+
+        Field protoRowType = jdbcTableClass.getDeclaredField("protoRowType");
+        protoRowType.setAccessible(true);
+        JavaTypeFactoryImpl typeFactory = new JavaTypeFactoryImpl();
+        RelDataTypeFactory.Builder builder = typeFactory.builder();
+        builder.add("name", SqlTypeName.VARCHAR);
+        builder.add("age", SqlTypeName.INTEGER);
+        builder.add("salary", SqlTypeName.DOUBLE);
+        RelProtoDataType relProtoDataType = relDataTypeFactory -> builder.build();
+        protoRowType.set(jdbcTable, relProtoDataType);
+
+        String calciteHiveTableName = "person"; // Note: 这是calcite层面的tableName
+        rootSchema.getSubSchema(calciteHiveSchemaName).add(calciteHiveTableName, jdbcTable);
     }
 
     private static void closeRestClient() throws IOException {
