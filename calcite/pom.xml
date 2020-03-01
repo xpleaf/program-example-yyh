@@ -17,6 +17,7 @@
         <lombok.version>1.18.8</lombok.version>
         <jackson.version>2.9.8</jackson.version>
         <hiveJdbc.version>2.1.0</hiveJdbc.version>
+        <mysql.version>8.0.19</mysql.version>
     </properties>
 
     <dependencies>
@@ -64,6 +65,12 @@
             <groupId>org.apache.hive</groupId>
             <artifactId>hive-jdbc</artifactId>
             <version>${hiveJdbc.version}</version>
+        </dependency>
+        <!-- mysql connector -->
+        <dependency>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+            <version>${mysql.version}</version>
         </dependency>
         <!-- junit -->
         <dependency>

@@ -31,6 +31,7 @@ import org.apache.calcite.plan.*;
 import org.apache.calcite.prepare.CalcitePrepareImpl;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
+import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rel.type.RelDataTypeSystem;
 import org.apache.calcite.rel.type.RelProtoDataType;
@@ -38,6 +39,7 @@ import org.apache.calcite.runtime.Bindable;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.Schemas;
+import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.*;
 import org.apache.calcite.sql.dialect.HiveSqlDialect;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
@@ -50,6 +52,7 @@ import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
 import org.apache.calcite.tools.Programs;
+import org.apache.calcite.util.Pair;
 import org.apache.commons.dbcp2.BasicDataSource;
 import org.apache.commons.dbcp2.BasicDataSourceFactory;
 import org.apache.http.HttpHost;
@@ -80,6 +83,7 @@ public class EnumerableMain {
         // hive或spark本身的分布式意义就不是很大了，这时它仅仅用来scan数据
         // 所以要考虑sql的优化，我们把validate之后的sql透传给hive或spark sql，让它使用自身的sql优化器去优化并生成物理计划就好了
         buildJdbcSchemaForHive(rootSchema);
+        buildJdbcSchemaForMysql(rootSchema);
 
         SqlParser.Config sqlParserConfig = SqlParser.configBuilder()
                 .setQuoting(Quoting.BACK_TICK)
@@ -132,7 +136,7 @@ public class EnumerableMain {
         sql = "select * from hive.person order by salary desc limit 1";
         // Note: 下面这个sql，如果走calcite的全jdbc流程，只有scan能够pushdown，其它所有计算都在calcite层面完成
         // 所以识别出其是查询jdbc数据源，就不走全流程的calcite jdbc方式，拿到dataSource之后走传统的jdbc方式查询
-        sql = "select t.double_salary,t.young_age,(t.double_salary + t.young_age) * 2 as complex_field,count(*) as total\n" +
+        String complexSql = "select t.double_salary,t.young_age,(t.double_salary + t.young_age) * 2 as complex_field,count(*) as total\n" +
                 "from\n" +
                 "(\n" +
                 "select salary * 2 as double_salary,age - 1 as young_age\n" +
@@ -143,8 +147,10 @@ public class EnumerableMain {
                 "group by t.double_salary,t.young_age\n" +
                 "order by complex_field desc \n" +
                 "limit 1";
-        System.out.println("Sql source: \n" + sql + "\n");
-
+        sql = "select * from hive.person";
+        sql = "select * from mysql.teacher";
+        sql = complexSql;   // for hive test
+        sql = complexSql.replace("hive.person", "mysql.teacher");   // for mysql test
         // sql parse
         SqlNode parsed = commonPlanner.parse(sql);
         System.out.println("Sql parsed: \n" + parsed + "\n");
@@ -162,13 +168,12 @@ public class EnumerableMain {
         // logicalPlan
         RelRoot root = commonPlanner.rel(validated);
         System.out.println("LogicalPlan: \n" + RelOptUtil.toString(root.rel) + "\n");
-        if (isJdbcQuery(root.rel)) {    // Note: jdbc查询，走传统的jdbc执行流程，calcite只用于元数据系统构建和schema校验
-            System.out.println("it's a jdbc query!");
-            if (validated.getKind() == SqlKind.SELECT) {
-                ((SqlSelect) validated).getFrom().accept(new SqlFromReWriter());
-            }
-            String validatedSql = validated.toSqlString(HiveSqlDialect.DEFAULT).toString();
-            JdbcSchema jdbcSchema = rootSchema.getSubSchema("hive").unwrap(JdbcSchema.class);
+        Pair<Boolean, SqlDialect> pair = isJdbcQuery(root.rel);
+        if (pair.left) {    // Note: jdbc查询，走传统的jdbc执行流程，calcite只用于元数据系统构建和schema校验
+            System.out.println("it's a jdbc query! Type: " + pair.right.getClass().getSimpleName());
+            rewriteSql(validated, rootSchema);
+            String validatedSql = validated.toSqlString(pair.right).toString();
+            JdbcSchema jdbcSchema = rootSchema.getSubSchema(getSchemaName(root.rel)).unwrap(JdbcSchema.class);
             DataSource dataSource = jdbcSchema.getDataSource();
             try(
             Connection connection = dataSource.getConnection();
@@ -258,15 +263,76 @@ public class EnumerableMain {
         closeRestClient();
     }
 
-    private static boolean isJdbcQuery(RelNode rel) {
+    private static class SqlFromReWriterForJdbc extends SqlShuttle {
+
+
+        private SchemaPlus rootSchema;
+
+        SqlFromReWriterForJdbc(SchemaPlus rootSchema) {
+            this.rootSchema = rootSchema;
+        }
+
+        @Override
+        public SqlNode visit(SqlIdentifier id) {
+            ImmutableList<String> names = id.names;
+            int size = names.size();
+            if (size > 1) {
+                String schemaName = names.get(0);
+                String tableName = names.get(1);
+                Table table = rootSchema.getSubSchema(schemaName).getTable(tableName);
+                if (table instanceof JdbcTable) {
+                    JdbcTable jdbcTable = (JdbcTable) table;
+                    String jdbcSchemaName = jdbcTable.jdbcSchemaName;
+                    String jdbcTableName = jdbcTable.jdbcTableName;
+                    id.setNames(
+                            ImmutableList.of(jdbcSchemaName, jdbcTableName),
+                            ImmutableList.of(id.getComponentParserPosition(0), id.getComponentParserPosition(1))
+                    );
+                }
+            }
+            return super.visit(id);
+        }
+    }
+
+    private static void rewriteSql(SqlNode sqlNode, SchemaPlus rootSchema) {
+        switch (sqlNode.getKind()) {
+            case SELECT:
+                rewriteSql(((SqlSelect) sqlNode).getFrom(), rootSchema);
+                break;
+            case AS:
+                rewriteSql(((SqlBasicCall) sqlNode).operand(0), rootSchema);
+                break;
+            case IDENTIFIER:
+                sqlNode.accept(new SqlFromReWriterForJdbc(rootSchema));
+                break;
+        }
+    }
+
+    private static String getSchemaName(RelNode rel) {
+        if (rel.getInputs().size() > 0) {
+            return getSchemaName(rel.getInput(0));
+        } else {
+            if (rel instanceof TableScan) {
+                // qualifieldName为mysql.teacher或hive.person
+                // index为0的就是calcite层面的schemaName
+                return rel.getTable().getQualifiedName().get(0);
+            }
+            return null;
+        }
+    }
+
+    private static Pair<Boolean, SqlDialect> isJdbcQuery(RelNode rel) {
         if (rel.getInputs().size() > 0) {
             return isJdbcQuery(rel.getInput(0));
         } else {
             if (rel instanceof JdbcTableScan) {
-                return true;
+                JdbcTableScan jdbcTableScan = (JdbcTableScan) rel;
+                JdbcSchema jdbcSchema = jdbcTableScan.jdbcTable.jdbcSchema;
+                JdbcConvention convention = (JdbcConvention) rel.getConvention();
+                return Pair.of(true, convention.dialect);
             }
         }
-        return false;
+        return Pair.of(false, null);
     }
 
     private static DruidSchema buildDruidSchema() {
@@ -322,23 +388,42 @@ public class EnumerableMain {
         rootSchema.getSubSchema(calciteHiveSchemaName).add(calciteHiveTableName, jdbcTable);
     }
 
+
+    private static void buildJdbcSchemaForMysql(SchemaPlus rootSchema) throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty("driverClassName", "");
+        properties.setProperty("url", "jdbc:mysql://localhost:3306");
+        properties.setProperty("username", "root");
+        properties.setProperty("password", "root123456");
+        BasicDataSource dataSource = BasicDataSourceFactory.createDataSource(properties);
+        JdbcSchema jdbcSchema = JdbcSchema.create(rootSchema, "mysql", dataSource, null, "school");
+        // add to rootSchema
+        rootSchema.add("mysql", jdbcSchema);
+
+        // create jdbcTable
+        Class<JdbcTable> jdbcTableClass = JdbcTable.class;
+        Constructor<JdbcTable> jdbcTableConstructor = jdbcTableClass.getDeclaredConstructor(JdbcSchema.class,
+                String.class, String.class, String.class, Schema.TableType.class);
+        jdbcTableConstructor.setAccessible(true);
+        JdbcTable jdbcTable = jdbcTableConstructor.newInstance(jdbcSchema, null, "school", "teacher", Schema.TableType.TABLE);
+
+        Field protoRowType = jdbcTableClass.getDeclaredField("protoRowType");
+        protoRowType.setAccessible(true);
+        JavaTypeFactoryImpl typeFactory = new JavaTypeFactoryImpl();
+        RelDataTypeFactory.Builder builder = typeFactory.builder();
+        builder.add("name", SqlTypeName.VARCHAR);
+        builder.add("age", SqlTypeName.INTEGER);
+        builder.add("salary", SqlTypeName.DOUBLE);
+        RelProtoDataType relProtoDataType = relDataTypeFactory -> builder.build();
+        protoRowType.set(jdbcTable, relProtoDataType);
+
+        // add to jdbcSchema
+        rootSchema.getSubSchema("mysql").add("teacher", jdbcTable);
+    }
+
     private static void closeRestClient() throws IOException {
         if (restClient != null) {
             restClient.close();
         }
     }
-
-    private static class SqlFromReWriter extends SqlShuttle {
-
-        @Override
-        public SqlNode visit(SqlIdentifier id) {
-            ImmutableList<String> names = id.names;
-            int size = names.size();
-            if (size > 1) {
-                id.setNames(names.subList(size - 1, size), ImmutableList.of(id.getParserPosition()));
-            }
-            return super.visit(id);
-        }
-    }
-
 }
