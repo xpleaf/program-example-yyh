@@ -16,6 +16,7 @@
 
     <modules>
         <module>calcite</module>
+        <module>spark</module>
     </modules>
 
 
