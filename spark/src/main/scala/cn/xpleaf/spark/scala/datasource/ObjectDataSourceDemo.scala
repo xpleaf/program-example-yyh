@@ -86,7 +86,7 @@ using cn.xpleaf.spark.scala.datasource.PersonRelationProvider;
 No rows selected (0.91 seconds)
 
 6.check the data in the hdfs
-yeyonghaodeMacBook-Pro:~ yyh$ hdfs dfs -cat /tmp/tables/person2/*
+yeyonghaodeMacBook-Pro:~ yyh$ hdfs dfs -cat /tmp/tables/person2/part-0000*.csv
 xpleaf,25,3000.0
 yyh,25,3200.0
 
