@@ -54,3 +54,40 @@ object ObjectDataSourceDemo {
   }
 
 }
+
+/*
+how to use this datasource in spark beeline?
+
+1.package
+assume that the package is spark-1.0-SNAPSHOT.jar
+
+2.start thriftserver using the jar
+start-thriftserver.sh --jars jars/spark-1.0-SNAPSHOT.jar
+
+3.using the datasource to create a table in spark beeline
+create table person2(name string,age int,salary double)
+using cn.xpleaf.spark.scala.datasource.PersonRelationProvider;
+
+4.scan the table
+0: jdbc:hive2://localhost:10000> select * from person2;
++---------+------+---------+--+
+|  name   | age  | salary  |
++---------+------+---------+--+
+| xpleaf  | 26   | 1500.0  |
+| yyh     | 26   | 1600.0  |
++---------+------+---------+--+
+
+5.withe the table data to hdfs
+0: jdbc:hive2://localhost:10000> insert overwrite directory '/tmp/tables/person2' using csv select name,age-1,salary*2 from person2;
++---------+--+
+| Result  |
++---------+--+
++---------+--+
+No rows selected (0.91 seconds)
+
+6.check the data in the hdfs
+yeyonghaodeMacBook-Pro:~ yyh$ hdfs dfs -cat /tmp/tables/person2/*
+xpleaf,25,3000.0
+yyh,25,3200.0
+
+ */
