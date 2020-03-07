@@ -13,7 +13,9 @@
         <java.version>1.8</java.version>
         <scala.version>2.11.12</scala.version>
         <spark.version>2.3.2</spark.version>
+        <hadoop.version>2.6.5</hadoop.version>
         <calcite.version>1.20.0</calcite.version>
+        <druid.version>0.16.1-incubating</druid.version>
         <hiveJdbc.version>2.1.0</hiveJdbc.version>
         <mysql.version>8.0.19</mysql.version>
         <lombok.version>1.18.8</lombok.version>
@@ -97,6 +99,17 @@
                 <groupId>mysql</groupId>
                 <artifactId>mysql-connector-java</artifactId>
                 <version>${mysql.version}</version>
+            </dependency>
+            <!-- druid -->
+            <dependency>
+                <groupId>org.apache.druid</groupId>
+                <artifactId>druid-sql</artifactId>
+                <version>${druid.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.druid</groupId>
+                <artifactId>druid-indexing-hadoop</artifactId>
+                <version>${druid.version}</version>
             </dependency>
             <!-- junit -->
             <dependency>
