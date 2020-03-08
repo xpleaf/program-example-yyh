@@ -41,6 +41,11 @@
             <groupId>org.apache.druid</groupId>
             <artifactId>druid-indexing-hadoop</artifactId>
         </dependency>
+        <!-- lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

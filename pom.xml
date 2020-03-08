@@ -21,6 +21,9 @@
         <lombok.version>1.18.8</lombok.version>
         <!-- jackson版本不要太高，不然spark2.x依赖会有问题 -->
         <jackson.version>2.6.7</jackson.version>
+        <!-- 强制指定版本号，apache一些项目依赖这个类时，是不指定版本号的，导致每次build去下载maven-metadata.xml，会很卡很慢 -->
+        <!-- Reference: https://blog.csdn.net/jvortex/article/details/53083363 -->
+        <commonsCodec.version>1.10</commonsCodec.version>
     </properties>
 
     <modules>
@@ -111,6 +114,13 @@
                 <artifactId>druid-indexing-hadoop</artifactId>
                 <version>${druid.version}</version>
             </dependency>
+            <!-- commons codec -->
+            <dependency>
+                <groupId>commons-codec</groupId>
+                <artifactId>commons-codec</artifactId>
+                <version>${commonsCodec.version}</version>
+            </dependency>
+
             <!-- junit -->
             <dependency>
                 <groupId>junit</groupId>

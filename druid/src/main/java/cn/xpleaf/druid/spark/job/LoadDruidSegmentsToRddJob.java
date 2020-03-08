@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import lombok.Getter;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
@@ -75,8 +76,10 @@ public class LoadDruidSegmentsToRddJob {
 
     private RowSignature rowSignature;
 
+    @Getter
     private List<String> dimensions = new LinkedList<>();
 
+    @Getter
     private List<String> metrics = new LinkedList<>();
 
     public LoadDruidSegmentsToRddJob(StructType schema, String datasource, List<Interval> intervals) {
