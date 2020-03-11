@@ -30,6 +30,7 @@
         <module>calcite</module>
         <module>spark</module>
         <module>druid</module>
+        <module>common</module>
     </modules>
 
     <dependencyManagement>
