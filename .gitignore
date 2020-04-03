@@ -17,6 +17,9 @@ settings.xml
 nb-configuration.xml
 */nb-configuration.xml
 
+# mac
+.DS_Store
+
 .mvn/wrapper/maven-wrapper.jar
 
 # End .gitignore
