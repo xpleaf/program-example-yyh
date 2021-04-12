@@ -1,6 +1,7 @@
 package cn.xpleaf.calcite.common;
 
 import cn.xpleaf.calcite.schema.HrSchema;
+import cn.xpleaf.calcite.schema.StaffSchema;
 import cn.xpleaf.calcite.utils.ResultSetUtil;
 import cn.xpleaf.query.schema.InformationSchema;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -75,6 +76,7 @@ public class EnumerableMain {
         SchemaPlus rootSchema = Frameworks.createRootSchema(true);
         rootSchema.add("information_schema", new InformationSchema(rootSchema));
         rootSchema.add("hr", new ReflectiveSchema(new HrSchema()));
+        rootSchema.add("staff", new ReflectiveSchema(new StaffSchema()));
         rootSchema.add("druid", buildDruidSchema());
         rootSchema.add("es", buildElasticsearchSchema());
         // Note: 实际上查hive或者rdb，不建议使用下面的这种方式，按照传统jdbc方式直接拿到sql来透传就好了，因为calcite的jdbc适配器
@@ -151,6 +153,17 @@ public class EnumerableMain {
         sql = "select * from mysql.teacher";
         sql = complexSql;   // for hive test
         sql = complexSql.replace("hive.person", "mysql.teacher");   // for mysql test
+        sql = "SELECT\n" +
+                "    u.NAME,\n" +
+                "    u.age,\n" +
+                "    c.NAME AS user_company\n" +
+                "FROM\n" +
+                "    staff.users u\n" +
+                "        JOIN staff.companies c ON u.company = c.id\n" +
+                "WHERE\n" +
+                "        u.age >= 26\n" +
+                "ORDER BY\n" +
+                "    u.age DESC";
         // sql parse
         SqlNode parsed = commonPlanner.parse(sql);
         System.out.println("Sql parsed: \n" + parsed + "\n");
