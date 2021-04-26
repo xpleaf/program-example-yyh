@@ -22,4 +22,7 @@ nb-configuration.xml
 
 .mvn/wrapper/maven-wrapper.jar
 
+# others
+log
+
 # End .gitignore
